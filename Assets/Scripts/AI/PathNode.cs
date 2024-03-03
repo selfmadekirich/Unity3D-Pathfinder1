@@ -2,88 +2,64 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public class PathNode //: MonoBehaviour
+public class PathNode : Priority_Queue.FastPriorityQueueNode
 {
-    public bool walkable;           //  Свободна для перемещения
-    public Vector3 worldPosition;   //  Позиция в глобальных координатах
-    private GameObject objPrefab;   //  Шаблон объекта
-    public GameObject body;         //  Объект для отрисовки
-    
-    private PathNode parentNode = null;               //  откуда пришли
-    
-    /// <summary>
-    /// Родительская вершина - предшествующая текущей в пути от начальной к целевой
-    /// </summary>
+    public bool walkable;            //  Проходим узел сетки
+    public Vector3 worldPosition;    //  Координаты узла
+    public GameObject body;         //  Тело узла
+    private PathNode parent = null;  //  Родительский узел
+    private float distance = float.PositiveInfinity;
+    public Vector2Int gridIndex;
     public PathNode ParentNode
     {
-        get => parentNode;
+        get => parent;
         set => SetParent(value);
     }
 
-    private float distance = float.PositiveInfinity;  //  расстояние от начальной вершины
-
-    /// <summary>
-    /// Расстояние от начальной вершины до текущей (+infinity если ещё не развёртывали)
-    /// </summary>
-    public float Distance
+    private void SetParent(PathNode parentNode)
     {
-        get => distance;
-        set => distance = value;
-    }
-
-    /// <summary>
-    /// Устанавливаем родителя и обновляем расстояние от него до текущей вершины. Неоптимально - дважды расстояние считается
-    /// </summary>
-    /// <param name="parent"></param>
-    private void SetParent(PathNode parent)
-    {
-        //  Указываем родителя
-        parentNode = parent;
-        //  Вычисляем расстояние
+        parent = parentNode;
         if (parent != null)
-            distance = parent.Distance + Vector3.Distance(body.transform.position, parent.body.transform.position);
+            distance = parent.distance + PathNode.Dist(parent, this);
         else
             distance = float.PositiveInfinity;
     }
 
-    /// <summary>
-    /// Конструктор вершины
-    /// </summary>
-    /// <param name="_objPrefab">объект, который визуализируется в вершине</param>
-    /// <param name="_walkable">проходима ли вершина</param>
-    /// <param name="position">мировые координаты</param>
-    public PathNode(GameObject _objPrefab, bool _walkable, Vector3 position)
+    public float Distance
     {
-        objPrefab = _objPrefab;
-        walkable = _walkable;
-        worldPosition = position;
-        body = GameObject.Instantiate(objPrefab, worldPosition, Quaternion.identity);
+        get => distance;
+        set => distance = value;    //   Плохо!
     }
 
-    /// <summary>
-    /// Расстояние между вершинами - разброс по высоте учитывается дополнительно
-    /// </summary>
-    /// <param name="a"></param>
-    /// <param name="b"></param>
-    /// <returns></returns>
-    public static float Dist(PathNode a, PathNode b)
+    public PathNode(GameObject prefab, bool walkable, Vector3 position)
     {
-        return Vector3.Distance(a.body.transform.position, b.body.transform.position) + 40 * Mathf.Abs(a.body.transform.position.y - b.body.transform.position.y);
+        this.walkable = walkable;
+        worldPosition = position;
+        SetParent(null);
+        body = GameObject.Instantiate(prefab, position, Quaternion.identity);
     }
-    
-    /// <summary>
-    /// Подсветить вершину - перекрасить в красный
-    /// </summary>
+
+    public static float Dist(PathNode source, PathNode dest)
+    {
+        float baseDist = Vector3.Distance(source.worldPosition, dest.worldPosition);
+        if (dest.worldPosition.y > source.worldPosition.y)
+            return baseDist + 10 * (dest.worldPosition.y - source.worldPosition.y);
+        else
+            return baseDist + 5*(source.worldPosition.y - dest.worldPosition.y);
+    }
+
     public void Illuminate()
     {
-        body.GetComponent<Renderer>().material.color = Color.red;
+        body.GetComponent<Renderer>().material.color = Color.blue;
     }
-    
-    /// <summary>
-    /// Снять подсветку с вершины - перекрасить в синий
-    /// </summary>
+
     public void Fade()
     {
-        body.GetComponent<Renderer>().material.color = Color.blue;
+        body.GetComponent<Renderer>().material.color = Color.gray;
+    }
+
+    public void Highlight()
+    {
+        body.GetComponent<Renderer>().material.color = Color.red;
     }
 }

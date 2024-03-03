@@ -1,136 +1,155 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class Grid : MonoBehaviour
 {
-    //  Модель для отрисовки узла сетки
-    public GameObject nodeModel;
+    [SerializeField] private GameObject nodeModel;      //   Шаблон узла сетки
+    [SerializeField] private Terrain landscape;
+    [SerializeField] private float gridDelta = 20;
+    private int updateAtFrame = 0;
 
-    //  Ландшафт (Terrain) на котором строится путь
-    [SerializeField] private Terrain landscape = null;
-
-    //  Шаг сетки (по x и z) для построения точек
-    [SerializeField] private int gridDelta = 20;
-
-    //  Номер кадра, на котором будет выполнено обновление путей
-    private int updateAtFrame = 0;  
-
-    //  Массив узлов - создаётся один раз, при первом вызове скрипта
     private PathNode[,] grid = null;
 
     private void CheckWalkableNodes()
     {
-        foreach (PathNode node in grid)
+        foreach(PathNode node in grid)
         {
-            //  Пока что считаем все вершины проходимыми, без учёта препятствий
-            node.walkable = true;
-            /*node.walkable = !Physics.CheckSphere(node.body.transform.position, 1);
+            //node.walkable = true;
+            node.walkable = !Physics.CheckSphere(node.body.transform.position, 1) && (node.worldPosition.y < 80);
             if (node.walkable)
-                node.Fade();
-            else
-            {
                 node.Illuminate();
-                Debug.Log("Not walkable!");
-            }*/
+            else
+                node.Fade();
         }
     }
 
-
-    // Метод вызывается однократно перед отрисовкой первого кадра
-    void Start()
-    {
-        //  Создаём сетку узлов для навигации - адаптивную, под размер ландшафта
-        Vector3 terrainSize = landscape.terrainData.bounds.size;
-        int sizeX = (int)(terrainSize.x / gridDelta);
-        int sizeZ = (int)(terrainSize.z / gridDelta);
-        //  Создаём и заполняем сетку вершин, приподнимая на 25 единиц над ландшафтом
-        grid = new PathNode[sizeX,sizeZ];
-        for (int x = 0; x < sizeX; ++x)
-            for (int z = 0; z < sizeZ; ++z)
-            {
-                Vector3 position = new Vector3(x * gridDelta, 0, z * gridDelta);
-                position.y = landscape.SampleHeight(position) + 25;
-                grid[x, z] = new PathNode(nodeModel, false, position);
-                grid[x, z].ParentNode = null;
-                grid[x, z].Fade();
-            }
-    }
-    /// <summary>
-    /// Получение списка соседних узлов для вершины сетки
-    /// </summary>
-    /// <param name="current">индексы текущей вершины </param>
-    /// <returns></returns>
     private List<Vector2Int> GetNeighbours(Vector2Int current)
     {
         List<Vector2Int> nodes = new List<Vector2Int>();
+
         for (int x = current.x - 1; x <= current.x + 1; ++x)
             for (int y = current.y - 1; y <= current.y + 1; ++y)
-                if (x >= 0 && y >= 0 && x < grid.GetLength(0) && y < grid.GetLength(1) && (x != current.x || y != current.y))
-                    nodes.Add(new Vector2Int(x, y));
-                return nodes;
+                if(x >= 0 && x < grid.GetLength(0) && y>=0 && y < grid.GetLength(1) && (x != current.x || y != current.y) && grid[x,y].walkable)
+                nodes.Add(new Vector2Int(x, y));
+        return nodes;
     }
 
-    /// <summary>
-    /// Вычисление "кратчайшего" между двумя вершинами сетки
-    /// </summary>
-    /// <param name="startNode">Координаты начального узла пути (индексы элемента в массиве grid)</param>
-    /// <param name="finishNode">Координаты конечного узла пути (индексы элемента в массиве grid)</param>
-    void calculatePath(Vector2Int startNode, Vector2Int finishNode)
+    void CalculatePath(Vector2Int startNode, Vector2Int finishNode,Action<PathNode,PathNode,PathNode, Priority_Queue.FastPriorityQueue<PathNode>> f)
     {
-        //  Очищаем все узлы - сбрасываем отметку родителя, снимаем подсветку
-        foreach (var node in grid)
-        {
-            node.Fade();
-            node.ParentNode = null;
-        }
-        
-        //  На данный момент вызов этого метода не нужен, там только устанавливается проходимость вершины. Можно добавить обработку препятствий
         CheckWalkableNodes();
-
-        //  Реализуется аналог волнового алгоритма, причём найденный путь не будет являться оптимальным 
+        foreach(PathNode node in grid)
+            node.ParentNode = null;
 
         PathNode start = grid[startNode.x, startNode.y];
-
-        //  Начальную вершину отдельно изменяем
         start.ParentNode = null;
         start.Distance = 0;
+        HashSet<Vector2Int> marked = new HashSet<Vector2Int>();
+
+        // Нужна очередь с приоритетом!!!
+        Vector3 terrainSize = landscape.terrainData.bounds.size;
+        int sizeX = (int)(terrainSize.x / gridDelta);
+        int sizeZ = (int)(terrainSize.z / gridDelta);
+        Priority_Queue.FastPriorityQueue<PathNode> pq = new Priority_Queue.FastPriorityQueue<PathNode>(sizeX*sizeZ*2);
         
-        //  Очередь вершин в обработке - в A* необходимо заменить на очередь с приоритетом
-        Queue<Vector2Int> nodes = new Queue<Vector2Int>();
-        //  Начальную вершину помещаем в очередь
-        nodes.Enqueue(startNode);
-        //  Пока не обработаны все вершины (очередь содержит узлы для обработки)
-        while(nodes.Count != 0)
+        //Queue<Vector2Int> nodes = new Queue<Vector2Int>();
+        pq.Enqueue(start, 0);
+
+        float startTime = Time.time;
+
+        var target = grid[finishNode.x, finishNode.y];
+
+        while(pq.Count > 0)
         {
-            Vector2Int current = nodes.Dequeue();
-            //  Если достали целевую - можно заканчивать (это верно и для A*)
-            if (current == finishNode) break;
-            //  Получаем список соседей
-            var neighbours = GetNeighbours(current);
-            foreach (var node in neighbours)
-                if(grid[node.x, node.y].walkable && grid[node.x, node.y].Distance > grid[current.x, current.y].Distance + PathNode.Dist(grid[node.x, node.y], grid[current.x, current.y]))
-                {
-                    grid[node.x, node.y].ParentNode = grid[current.x, current.y];
-                    nodes.Enqueue(node);
-                }
+            //  Вытаскиваем очередную вершину из списка
+            PathNode current = pq.Dequeue();
+            current.body.GetComponent<HighLight>().setStartTime(startTime);
+            startTime += 0.08f;
+            pq.ResetNode(current);
+
+            Vector2Int currentIndex = current.gridIndex;
+            if (currentIndex == finishNode) break;
+            //PathNode current = grid[currentIndex.x, currentIndex.y];
+
+            if (marked.Contains(current.gridIndex))
+                continue;
+            marked.Add(current.gridIndex);
+
+            var neighbours = GetNeighbours(currentIndex);
+            //Debug.Log("Neighbours : " + neighbours.Count);
+            foreach(var node in neighbours)
+            {
+                PathNode next = grid[node.x, node.y];
+                if (!next.walkable)
+                    continue;
+                f(next, current, target,pq);
+            }
         }
-        //  Восстанавливаем путь от целевой к стартовой
-        var pathElem = grid[finishNode.x, finishNode.y];
-        while(pathElem != null)
+
+        Debug.Log("Path build! HighLighting it!");
+        PathNode pathPoint = grid[finishNode.x, finishNode.y];
+        while(pathPoint != null)
         {
-            pathElem.Illuminate();
-            pathElem = pathElem.ParentNode;
+            pathPoint.Highlight();
+            pathPoint = pathPoint.ParentNode;
         }
     }
+
+    // Метод вызывается однократно при создании экземпляра класса
+    void Start()
+    {
+        Vector3 terrainSize = landscape.terrainData.bounds.size;
+        int sizeX = (int)(terrainSize.x / gridDelta);
+        int sizeZ = (int)(terrainSize.z / gridDelta);
+
+        grid = new PathNode[sizeX, sizeZ];
+        for(int x = 0; x<sizeX; ++x)
+            for(int z = 0; z<sizeZ; ++z)
+            {
+                Vector3 position = new Vector3(x * gridDelta, 0, z * gridDelta);
+                position.y = landscape.SampleHeight(position) + 25;
+                grid[x, z] = new PathNode(nodeModel, true, position);
+                //  Каждый узел массива знает своё место
+                grid[x, z].gridIndex = new Vector2Int(x, z);
+                grid[x, z].Fade();
+            }
+        CheckWalkableNodes();
+    }
+    
+    void DeikstraFunction(PathNode next,PathNode current, PathNode target, Priority_Queue.FastPriorityQueue<PathNode> pq)
+    {
+        if (next.Distance > current.Distance + PathNode.Dist(current, next))
+        {
+            next.ParentNode = current;
+            if (pq.Contains(next))
+                pq.UpdatePriority(next, next.Distance);
+            else
+                pq.Enqueue(next, next.Distance);
+        }
+    }
+
+    void A_star_Euclidean(PathNode next, PathNode current, PathNode target, Priority_Queue.FastPriorityQueue<PathNode> pq)
+    {
+        var metric = current.Distance + PathNode.Dist(next, target);
+        if (next.Distance > current.Distance + PathNode.Dist(next,target))
+        {
+            next.ParentNode = current;
+            if (pq.Contains(next))
+                pq.UpdatePriority(next, metric);
+            else
+                pq.Enqueue(next, metric);
+        }
+    }
+
 
     // Метод вызывается каждый кадр
     void Update()
     {
-        //  Чтобы не вызывать этот метод каждый кадр, устанавливаем интервал вызова в 1000 кадров
         if (Time.frameCount < updateAtFrame) return;
-        updateAtFrame = Time.frameCount + 1000;
+        updateAtFrame = Time.frameCount + 5000;
+        //Debug.Log("Pathfinding started");
 
-        calculatePath(new Vector2Int(0, 0), new Vector2Int(grid.GetLength(0)-1, grid.GetLength(1)-1));
+        CalculatePath(new Vector2Int(0, 0), new Vector2Int(grid.GetLength(0) - 3, grid.GetLength(1) - 3), A_star_Euclidean);
     }
 }
